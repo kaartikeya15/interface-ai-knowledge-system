@@ -1,0 +1,12 @@
+results/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+snapshots/0*/
+
+# Supplied data must not be published
+snapshots_zip/
+*.zip
+Knowledge-Hackathon-Assignment.pdf
+SATURDAY_PLAN.md
