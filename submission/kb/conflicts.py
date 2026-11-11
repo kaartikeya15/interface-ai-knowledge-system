@@ -52,7 +52,7 @@ def _topic(row) -> str:
     return f"{scope}{prefix}: {name}"
 
 
-def _row_conflicts(views) -> tuple[list[Found], dict]:
+def _row_conflicts(views) -> list[Found]:
     latest = views[-1]
     history = defaultdict(list)
     for view in views:
@@ -89,7 +89,7 @@ def _row_conflicts(views) -> tuple[list[Found], dict]:
             reason = f"The value changed between snapshots; the latest snapshot ({latest.snapshot_id}) is current."
         c = Conflict(topic=_topic(row), values=values, sources=sources[:6], resolution=_describe(row), reason=reason)
         out.append(Found(c, _group(row.family, row.label, c.topic), [f"{row.label}: {_describe(row)}"]))
-    return out, history
+    return out
 
 
 def _group(family: str, label: str, topic: str) -> tuple:
@@ -252,7 +252,7 @@ def _safely(finder, views) -> list:
 def find(views) -> list[Conflict]:
     if not views:
         return []
-    rows = _safely(lambda v: _row_conflicts(v)[0], views)
+    rows = _safely(_row_conflicts, views)
     merged = _safely(lambda v: _merge(rows + _calculator(v)), views)
     # Order: claims and single facts first, then the merged rate groups.
     merged.sort(key=lambda c: (c.topic.split("-")[0].isdigit(), c.topic))

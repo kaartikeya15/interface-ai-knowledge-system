@@ -3,7 +3,7 @@
 Answers member questions from five crawls of the website, picking the current, correctly tiered value. It cites the source, answers as of any date, says "I don't know" when the site doesn't say, and lists where the site contradicts itself.
 
 - **No packages, no API keys.** Python standard library, 3.9 to 3.13. An optional LLM selector switches on with a free Groq key (`GROQ_API_KEY`).
-- **Fast.** Ingests five snapshots in about 4 s; the slowest answer takes 0.05 s.
+- **Fast.** Ingests five snapshots in about 3.5 s; the slowest answer takes 0.05 s.
 - **Deterministic.** The same answers and conflicts on every run.
 - **Cannot invent a number.** Answers quote the site; they are never generated.
 
@@ -15,7 +15,7 @@ The crawled snapshots are not in this repository (the data may not be redistribu
 
 ```bash
 python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl   # practice set: 0.969
-python -m unittest discover -s submission/tests -v                                 # 28 unit tests, made-up pages only
+python -m unittest discover -s submission/tests -v                                 # 31 unit tests, made-up pages only
 ```
 
 ## How it works

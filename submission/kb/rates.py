@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from .common import REFUSAL, reply, sources_for
+from .common import REFUSAL, long_date, reply, sources_for
 from . import site_profile as site
 from .parse import MONTHS
 
@@ -83,7 +83,7 @@ def _describe(row) -> str:
 
 def _effective(facts) -> str:
     dates = sorted({f.row.effective for f in facts if f.row.effective})
-    return f" (rates effective {dates[-1].strftime('%B %-d, %Y')})" if dates else ""
+    return f" (rates effective {long_date(dates[-1])})" if dates else ""
 
 
 def _finish(view, facts, lines, note=None):

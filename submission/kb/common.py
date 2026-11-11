@@ -1,16 +1,27 @@
-"""Shared answer helpers."""
+"""Shared answer helpers, and the contract types the scorer expects."""
 import sys
 from pathlib import Path
 
 try:
+    from contract import Answer, Conflict, Source   # the scorer puts harness/ on the path
+except ImportError:
+    # Run outside the scorer: use the kit's harness/ folder from a parent directory if there is one.
+    harness = next((d / "harness" for d in Path(__file__).resolve().parents if (d / "harness" / "contract.py").exists()), None)
+    if harness is None:
+        raise ImportError("contract.py not found: run through harness/run_eval.py, or keep this folder inside the kit")
+    sys.path.insert(0, str(harness))
     from contract import Answer, Conflict, Source
-except ImportError:  # run from outside the scorer
-    sys.path.insert(0, str(next(d / "harness" for d in Path(__file__).resolve().parents if (d / "harness").exists())))
-    from contract import Answer, Conflict, Source  # noqa: F401
+
+__all__ = ["Answer", "Conflict", "Source", "REFUSAL", "long_date", "reply", "sources_for"]
 
 # Digit-free on purpose: a refusal must not state any value, including a phone number.
 REFUSAL = ("I don't know. The website doesn't list {what}, so I won't guess. "
            "Please contact the credit union directly and a team member can help.")
+
+
+def long_date(d) -> str:
+    """'September 1, 2026'. Built by hand: strftime's '%-d' fails on Windows."""
+    return f"{d:%B} {d.day}, {d.year}"
 
 
 def reply(text, sources=(), confident=True, conflict_note=None):

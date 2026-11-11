@@ -7,7 +7,7 @@ My solution is in **[`submission/`](submission/)**:
 - **No packages and no API keys.** It runs on the Python standard library. An optional LLM selector switches on with a free Groq key (`GROQ_API_KEY`).
 - **Practice set: 0.969**, with no stale values repeated.
 - **Fast:** the slowest answer takes 0.05 s.
-- **Deterministic**, with 28 unit tests.
+- **Deterministic**, with 31 unit tests.
 
 ## Run from a fresh clone
 

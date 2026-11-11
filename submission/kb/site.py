@@ -7,7 +7,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from . import site_profile as site
-from .common import REFUSAL, Source, reply
+from .common import REFUSAL, Source, long_date, reply
 from .parse import MONTHS, page_kind, path_of
 from .rates import family_of
 from .search import query_tokens, tokens
@@ -59,7 +59,7 @@ def branch_count(q, view):
     older = sorted({c for _, c, _ in dated if c != count})
     note = f"Older releases say {', '.join(older)}; the newest dated release wins." if older else None
     return reply(f"{site.NAME} has {count} branch office locations, per its most recent press release"
-                 f" ({when.strftime('%B %-d, %Y')}).", [_src(view, url, f"{count} branch office locations")], conflict_note=note)
+                 f" ({long_date(when)}).", [_src(view, url, f"{count} branch office locations")], conflict_note=note)
 
 
 def branches(view) -> list[dict]:
@@ -310,7 +310,7 @@ def organization(q, view):
         if named:
             when, name, url = named[0]
             return reply(f"{name} is {site.NAME}'s President and CEO, per its newest press release that names the role"
-                         f" ({when.strftime('%B %-d, %Y')}).", [_src(view, url, f"President and CEO {name}")])
+                         f" ({long_date(when)}).", [_src(view, url, f"President and CEO {name}")])
         return None
     if re.search(r"\b(founded|established|chartered|started|start|begin|began|how old|since when|history)\b", q) and \
             re.search(rf"\b({site.NAME.lower()}|you|credit union)\b", q) and not re.search(r"\b(account|loan|card|membership)\b", q):

@@ -1,6 +1,6 @@
 # How this system works
 
-It needs **no API keys and no packages** (an optional LLM layer, described below, switches on only with a Groq key). It runs on the Python standard library, ingests all five snapshots in about three seconds, and answers in under 0.05 seconds. I chose this on purpose: the facts that matter sit in tables, and a deterministic parser cannot invent a rate, gives the same answer every time, and leaves a trail you can inspect. The cost is weaker matching of everyday wording, covered under Limits.
+It needs **no API keys and no packages** (an optional LLM layer, described below, switches on only with a Groq key). It runs on the Python standard library, ingests all five snapshots in about 3.5 seconds, and answers in under 0.05 seconds. I chose this on purpose: the facts that matter sit in tables, and a deterministic parser cannot invent a rate, gives the same answer every time, and leaves a trail you can inspect. The cost is weaker matching of everyday wording, covered under Limits.
 
 ## Pipeline
 
@@ -24,7 +24,7 @@ In order:
 
 ## How answers are chosen
 
-- **"Did it change?"** questions are answered at every snapshot. The reply says whether the value moved, and when. Wording changes such as "$0.00" becoming "$0" do not count as a change.
+- **"Did it change?"** questions are answered at every snapshot. The reply says whether the value moved, and when. Wording changes such as "$0.00" becoming "$0" do not count as a change. The same route takes "what was it before it changed?", "when did it last change?" and "is it higher now than in June 2026?". A change question runs up to today, or to the later of two dates ("between May 2026 and August 2026"), so a date in it is not mistaken for an as-of date.
 - **Counts from annual releases** ("how many employees used VTO") give the newest figure with its year, plus the previous release's figure. Each release reports a different year, so both are facts, not a hedge.
 - **An answer must mention the question's most specific word.** For a short question that is its rarest word; for a wordy one, two of its four rarest. A word the site never uses counts as the most specific of all, so "What's your SWIFT code?" is refused instead of matched to a page about "code entry".
 - **Product pages speak for Dupaco.** When a product page and an article both match, the product page wins. A member asking about a service is not answered from a loosely related article about someone else.
@@ -59,14 +59,15 @@ Answer keys in my own sets were read from the raw snapshot files. "First run" me
 
 **Conflicts:** the kit ships no gold list, so I built a stand-in from the 7 public questions whose trap value really appears in the snapshots. The system lists all 7 with the right winner when they are scored together. Scored alone, the 84-month auto entry loses its match to the 60-month one, because the scorer takes the first entry that shares a value. 7 of its 17 entries match the stand-in, which is a floor on precision, since the real list is longer. Several public traps (a routing number of 271176899, a 9.9% card APR, a 6.7% mortgage rate, `info.dupaco.com` links) appear in no snapshot, so I treated them as errors by an older system, not as site contradictions.
 
-**Why conflicts are one entry per product and term:** I tried one entry per tier (34 entries instead of 17). On the stand-in it scored worse: F1 fell from 0.56 to 0.33, and the right winner from 0.875 to 0.75, because the scorer matched the 84-month entry to the wrong tier. Merged entries say plainly that tiers are separate facts, give each tier's current value in the resolution, and list the superseded values. A scan of the newest snapshot found no sentence-stated rate that contradicts a rate table and goes unreported. The one mismatch is a separate program's rate in a press release.
+**Why conflicts are one entry per product and term:** I tried one entry per tier (34 entries instead of 17). On the stand-in it scored worse: F1 fell from 0.58 to 0.34, and the right winner from 1.0 to 0.86, because the scorer matched the 84-month entry to the wrong tier. Merged entries say plainly that tiers are separate facts, give each tier's current value in the resolution, and list the superseded values. A scan of the newest snapshot found no sentence-stated rate that contradicts a rate table and goes unreported. The one mismatch is a separate program's rate in a press release.
 
-**Unit tests** (`tests/test_kb.py`, 28 tests, stdlib `unittest`). They use made-up pages, so no crawled data is copied. They cover:
+**Unit tests** (`tests/test_kb.py`, 31 tests, stdlib `unittest`). They use made-up pages, so no crawled data is copied. They cover:
 - table parsing into typed rows;
 - tiers as separate facts;
 - calculators never being a source;
 - a newer effective date beating page authority, and the rate sheet winning a tie;
 - as-of selection, including a date written in the question;
+- other ways of asking about change, and a change window ending at its later date;
 - refusals with no digits;
 - odd input, conflicts, determinism, and the LLM layer (off without a key, falls back and stays fallen back after an error, reads replies safely).
 
@@ -78,6 +79,8 @@ To check the tests catch real bugs, I broke the code five ways (authority before
 - Before this fix, `as_of="2026-05"` and a question containing "February 30, 2026" crashed. A crash scores zero.
 - One malformed page cannot stop a snapshot from loading, and one failing conflict detector loses only its own entries.
 - On all 268 questions I have, none of these guards fires: they protect, they do not hide errors.
+- Dates in answers are written without `strftime("%-d")`, which fails on Windows.
+- If the scorer's `contract` module cannot be found, the import fails with a clear message instead of a bare `StopIteration`.
 
 **Other checks:**
 - Identical answers and conflicts across separate processes with different hash seeds.
@@ -94,7 +97,7 @@ Everyday wording that differs from the site's ("will mobile payments cost me ext
 - **It is off unless `GROQ_API_KEY` is set**, and every score above this section is without it. Groq's free tier is enough. An Anthropic key alone never switches it on, because the kit's scorer may hold one for its judge, and that path is untested.
 - Rate questions that the rate tables answer never reach it. For any that fall through, it may only choose passages from the rate sheet or product pages that state a rate.
 - **It runs after the rules, not before them.** The rules answer first. When they answer from a named subject's newest release ("Forbes named Dupaco a top employer for the fifth time") or from yearly releases (two years of a count), that answer stands. Those routes apply "newest dated release wins", which a model shown one passage at a time cannot. My first version asked the model first, and it lost three public questions this way.
-- With no key, an error, a timeout or a rate limit, the rules answer. A question that fell back keeps the rules answer for the rest of the run, so asking twice gives the same answer.
+- Calls time out after 1.8 seconds, inside the 2-second speed target. With no key, an error, a timeout or a rate limit, the rules answer. A question that fell back keeps the rules answer for the rest of the run, so asking twice gives the same answer.
 
 **Model:** `qwen/qwen3.8-27b` on Groq, at temperature 0. `openai/gpt-oss-120b` gave identical scores on every set but answers more slowly (median 0.48 s against 0.31 s).
 

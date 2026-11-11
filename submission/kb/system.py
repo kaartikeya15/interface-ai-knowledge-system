@@ -8,7 +8,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from . import conflicts as conflict_finder
-from .common import REFUSAL, Source, reply
+from .common import REFUSAL, Source, long_date, reply
 from .parse import MONTHS, path_of
 from .rates import answer_minimum, answer_rate, asks_for_rate
 from .site import (branch_address, branch_count, branch_status, contact, fees, holiday_hours, hours, link, membership,
@@ -23,8 +23,12 @@ VALUE_QUESTION = re.compile(r"\b(rates?|apy|apr|fees?|hours?|interest|how much|c
 QUESTION_DATE = re.compile(rf"\b(?:({MONTHS})\.? (\d{{1,2}})(?:st|nd|rd|th)?,? (\d{{4}})|({MONTHS}),? (\d{{4}})|"
                            rf"(\d{{4}}-\d{{2}}-\d{{2}}))\b", re.I)
 # "Did the 12-month rate change?" asks for history, not just today's value.
-CHANGE = re.compile(r"^(did|has|have|was|were|is|are)\b.*\b(chang\w*|go(?:ne)? (?:up|down)|went (?:up|down)|increas\w*|"
-                    r"decreas\w*|rais\w*|lower\w*|drop\w*|cut)\b|\bhow (?:has|have) .* chang\w*")
+MOVED = r"(?:chang\w*|go(?:ne)? (?:up|down)|went (?:up|down)|increas\w*|decreas\w*|rais\w*|lower\w*|drop\w*|cut)"
+CHANGE = re.compile(
+    rf"^(?:did|has|have|was|were|is|are)\b.*\b{MOVED}\b"                       # "did the 12-month rate change?"
+    rf"|\bhow (?:has|have) .* chang\w*|\bwhen did\b.*\b{MOVED}"               # "how has it changed?", "when did it change?"
+    r"|\bbefore (?:it|they|the \w+) (?:chang\w*|went|was|were)\b|\bused to (?:be|pay|cost)\b"   # "what was it before?"
+    r"|\b(?:higher|lower|more|less|better|worse)\b.*\b(?:now than|than (?:in|on|at|before|last|it was))\b")
 EFFECTIVE_NOTE = re.compile(r" \(rates effective [^)]*\)")
 NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 OFFICIAL_KINDS = {"product", "rate_sheet", "landing", "file"}
@@ -87,12 +91,18 @@ class KnowledgeBase:
             return self._unknown()
 
     def _answer(self, question: str, as_of: Optional[str]):
-        as_of = as_of or self._date_in(question)
+        q = re.sub(r"\s+", " ", question.lower().replace("’", "'")).strip()
+        change = bool(CHANGE.search(q))
+        if not as_of:
+            # A change question runs up to now: "higher now than in June 2026" compares June with today, and
+            # "between May 2026 and August 2026" ends at its later date. Any other question is asked as of its date.
+            dates = self._dates_in(question)
+            end = (max(dates) if len(dates) > 1 else None) if change else (dates[0] if dates else None)
+            as_of = end.isoformat() if end and end < self.views[-1].taken_on else None
         view = self.view_at(as_of)
         if view is None:
             return reply(REFUSAL.format(what="anything from that early"), [], confident=False)
-        q = re.sub(r"\s+", " ", question.lower().replace("’", "'")).strip()
-        if CHANGE.search(q):
+        if change:
             return self._history(question, q, view)
         return self._route(question, q, view)
 
@@ -104,23 +114,23 @@ class KnowledgeBase:
                 return result
         return self._from_text(question, q, view)
 
-    def _date_in(self, question: str) -> Optional[str]:
-        """Only a date before the newest snapshot changes anything; 'today (October 2026)' stays current."""
-        m = QUESTION_DATE.search(question)
-        if not m or not self.views:
-            return None
-        try:
-            if m.group(1):
-                day = datetime.strptime(f"{m.group(1).title()} {m.group(2)} {m.group(3)}", "%B %d %Y").date()
-            elif m.group(4):
-                month = datetime.strptime(m.group(4).title(), "%B").month
-                year = int(m.group(5))
-                day = date(year, month, monthrange(year, month)[1])   # "in May" means as May ended
-            else:
-                day = date.fromisoformat(m.group(6))
-        except ValueError:   # "February 30": not a real date, so it sets no as-of date
-            return None
-        return day.isoformat() if day < self.views[-1].taken_on else None
+    def _dates_in(self, question: str) -> list:
+        """Dates written in the question, in order. Only one before the newest snapshot changes anything:
+        'today (October 2026)' stays current."""
+        days = []
+        for m in QUESTION_DATE.finditer(question) if self.views else ():
+            try:
+                if m.group(1):
+                    days.append(datetime.strptime(f"{m.group(1).title()} {m.group(2)} {m.group(3)}", "%B %d %Y").date())
+                elif m.group(4):
+                    month = datetime.strptime(m.group(4).title(), "%B").month
+                    year = int(m.group(5))
+                    days.append(date(year, month, monthrange(year, month)[1]))   # "in May" means as May ended
+                else:
+                    days.append(date.fromisoformat(m.group(6)))
+            except ValueError:   # "February 30": not a real date, so it sets no as-of date
+                continue
+        return days
 
     def _history(self, question, q, view):
         """Answer the question at every snapshot up to this one and report where the value moved."""
@@ -136,14 +146,14 @@ class KnowledgeBase:
         if not now.confident:
             return now
         if len(timeline) == 1:
-            first = timeline[0][0].taken_on.strftime("%B %-d, %Y")
-            return reply(f"No. It has not changed in any snapshot from {first} to {view.taken_on.strftime('%B %-d, %Y')}: "
+            first = long_date(timeline[0][0].taken_on)
+            return reply(f"No. It has not changed in any snapshot from {first} to {long_date(view.taken_on)}: "
                          f"{now.text}", now.sources)
         steps = []
         for (_, last_old, _, old), (first_new, _, _, _) in zip(timeline, timeline[1:]):
             if old.confident:
-                steps.append(f"Before {first_new.taken_on.strftime('%B %-d, %Y')} (snapshot of "
-                             f"{last_old.taken_on.strftime('%B %-d, %Y')}): {old.text}")
+                steps.append(f"Before {long_date(first_new.taken_on)} (snapshot of "
+                             f"{long_date(last_old.taken_on)}): {old.text}")
         return reply(f"Yes, it changed. Now: {now.text} " + " ".join(steps), now.sources,
                      conflict_note="Earlier snapshots show the older values listed above.")
 
@@ -237,8 +247,8 @@ class KnowledgeBase:
         if not sentences:
             return answer
         line = max(sentences, key=lambda x: (len(wanted & set(tokens(x))), -len(x)))
-        text = (f"{answer.text} (Newest release, {best.published.strftime('%B %-d, %Y')}.) The previous release"
-                f" ({prev.published.strftime('%B %-d, %Y')}) reported: {line.strip()}")
+        text = (f"{answer.text} (Newest release, {long_date(best.published)}.) The previous release"
+                f" ({long_date(prev.published)}) reported: {line.strip()}")
         return reply(text, answer.sources + [Source(url=prev.url, snapshot_id=view.snapshot_id, quote=line[:200])])
 
     def _llm_choice(self, question, q, view, is_rate):

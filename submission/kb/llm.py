@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-TIMEOUT_S = float(os.getenv("KB_LLM_TIMEOUT", "4"))
+TIMEOUT_S = float(os.getenv("KB_LLM_TIMEOUT", "1.8"))   # the speed score wants answers within 2 s; slower calls fall back
 DEFAULTS = {
     "groq": ("https://api.groq.com/openai/v1/chat/completions", "GROQ_API_KEY", "qwen/qwen3.8-27b"),
     "anthropic": ("https://api.anthropic.com/v1/messages", "ANTHROPIC_API_KEY", "claude-haiku-5-5"),

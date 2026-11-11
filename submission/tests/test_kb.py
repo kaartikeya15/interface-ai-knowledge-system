@@ -147,6 +147,11 @@ class AsOfTests(unittest.TestCase):
     def test_date_written_in_the_question(self):
         self.assertIn("3.05%", self.ks.answer("What was the 12-month certificate APY in June 2026?").text)
 
+    def test_dates_are_written_portably(self):
+        from datetime import date
+        from kb.common import long_date
+        self.assertEqual(long_date(date(2026, 9, 1)), "September 1, 2026")   # no strftime("%-d"), which fails on Windows
+
     def test_as_of_formats(self):
         self.assertEqual(str(parse_as_of("2026-05")), "2026-05-31")
         self.assertEqual(str(parse_as_of("2026-05-20T10:00:00Z")), "2026-05-20")
@@ -156,6 +161,19 @@ class AsOfTests(unittest.TestCase):
         text = self.ks.answer("Did the 12-month certificate rate change?").text
         self.assertTrue(text.startswith("Yes"))
         self.assertIn("3.40%", text)
+
+    def test_other_ways_of_asking_about_change(self):
+        for question in ["What was the 12-month certificate APY before it changed?",
+                         "When did the 12-month certificate APY last change?",
+                         "Is the 12-month certificate APY higher now than in June 2026?"]:
+            text = self.ks.answer(question).text
+            self.assertTrue(text.startswith("Yes"), question)
+            self.assertIn("3.40%", text, question)   # now
+            self.assertIn("3.05%", text, question)   # before
+
+    def test_a_change_window_ends_at_its_later_date(self):
+        text = self.ks.answer("Did the 12-month certificate APY change between May 2026 and August 2026?").text
+        self.assertTrue(text.startswith("No"))   # both dates fall before the September snapshot
 
 
 class HonestyTests(unittest.TestCase):
