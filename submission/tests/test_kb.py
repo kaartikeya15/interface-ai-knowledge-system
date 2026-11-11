@@ -205,6 +205,75 @@ class HonestyTests(unittest.TestCase):
         self.assert_refusal(KnowledgeBase().answer("What's the 12-month certificate APY?"))
 
 
+FEES = """Example CU Rate and Fee Schedule Effective February 17, 2025
+The following fees apply.
+
+Deposit Services
+Stop payment (check, ACH, & bill pay) $30.00* per item
+Teller Services
+Incoming wire transfer $10.00
+Domestic wire $25.00 each
+International wire transfer $55.00 each
+Check-cashing fee (non member) $8.00 each
+Online Service Charges
+Per bill paid or attempted to pay
+(Free if signed up for e-statements) $0.50*
+Safe-Deposit Box
+Safe deposit box past due late fee $10.00
+Safe deposit box 3 X 5 X 21 $25.00
+Safe deposit box 5 X 5 X 21 $35.00
+"""
+
+
+class WordingTests(unittest.TestCase):
+    """General wording rules found by testing on new question sets."""
+
+    def setUp(self):
+        sep = snapshot("02_2026-09-28", "2026-09-28", SEP.pages + [page("/hubfs/fee-schedule.pdf", FEES)])
+        self.ks = system(MAY, sep)
+
+    def test_number_words(self):
+        self.assertIn("5.39%", self.ks.answer("APR for a sixty-month loan on a 2025 model year car?").text)
+
+    def test_plural_and_make_name_a_vehicle(self):
+        self.assertIn("5.64%", self.ks.answer("60 month loans for 2022 model year cars - APR?").text)
+        self.assertIn("5.39%", self.ks.answer("Financing a used 2025 Honda over 60 months, what APR?").text)
+
+    def test_numeric_dates_in_the_question(self):
+        self.assertIn("3.05%", self.ks.answer("What was the 12-month certificate APY on 6/1/2026?").text)
+
+    def test_fee_vocabulary(self):
+        self.assertIn("$55.00", self.ks.answer("How much to send money overseas by wire?").text)
+        self.assertIn("$10.00", self.ks.answer("What will I pay to receive a wire?").text)
+        self.assertIn("$30.00", self.ks.answer("fee for stopping a check").text)
+        self.assertIn("$8.00", self.ks.answer("If I'm not a member, what does it cost to cash a check?").text)
+
+    def test_fee_line_split_over_two_lines(self):
+        self.assertIn("$0.50", self.ks.answer("fee to pay a bill online").text)
+
+    def test_smallest_picks_the_plain_item(self):
+        text = self.ks.answer("How much is the smallest safe deposit box?").text
+        self.assertIn("$25.00", text)
+        self.assertNotIn("$35.00", text)
+
+
+class RetirementTests(unittest.TestCase):
+    def test_a_row_the_rate_sheet_dropped_is_history(self):
+        promo = "Relief Program\n\n| Loan Program | Term | Annual Percentage Rate (As Low As) |\n| --- | --- | --- |\n" \
+                "| Relief 2019 Model Year | 36 Months | 1.99% APR |\n\nRates are effective as of 04/01/2026.\n"
+        snap = snapshot("02_2026-09-28", "2026-09-28", SEP.pages + [page("/homebuying-guidance", promo)])
+        found = [k for k, f in system(snap).views[-1].facts.items() if "1.99%" in f.row.values.values()]
+        self.assertEqual(found, [], "an April row the September rate sheet no longer lists is not current")
+
+
+class AmountTests(unittest.TestCase):
+    def test_amount_forms(self):
+        from kb.rates import _amounts
+        self.assertEqual(_amounts("$1.2 million"), [1200000.0])
+        self.assertEqual(_amounts("$45k"), [45000.0])
+        self.assertEqual(_amounts("under $5,000"), [4999.99])
+
+
 class ConflictTests(unittest.TestCase):
     def test_changed_value_is_a_conflict_with_the_newest_winner(self):
         found = system(MAY, SEP).conflicts()

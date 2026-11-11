@@ -5,9 +5,9 @@ My solution is in **[`submission/`](submission/)**:
 - [`submission/NOTES.md`](submission/NOTES.md) explains how the system decides what is current, and how it was tested.
 
 - **No packages and no API keys.** It runs on the Python standard library. An optional LLM selector switches on with a free Groq key (`GROQ_API_KEY`).
-- **Practice set: 0.969**, with no stale values repeated.
+- **Practice set: 0.969.** On fresh question sets scored once, the last three rounds ran 0.859, 0.854 and 0.895 with no stale values.
 - **Fast:** the slowest answer takes 0.05 s.
-- **Deterministic**, with 31 unit tests.
+- **Deterministic**, with 39 unit tests.
 
 ## Run from a fresh clone
 

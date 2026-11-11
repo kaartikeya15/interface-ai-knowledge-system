@@ -54,10 +54,21 @@ class View:
             by_key[r.key].append(r)
         self.facts = {}
         self.retired = {}
+        # The newest date the rate sheet states for each product family it still publishes, personal and business apart.
+        sheet_date = defaultdict(lambda: date.min)
+        for r in rows:
+            if r.kind == "rate_sheet" and r.effective:
+                sheet_date[r.family, r.business] = max(sheet_date[r.family, r.business], r.effective)
         for key, group in by_key.items():
             group.sort(key=rank, reverse=True)
             # A promo page can outlive a tier the rate sheet dropped; such a row is history, not an offer.
             if all(r.kind == "landing" for r in group):
+                self.retired[key] = group[0]
+                continue
+            # So can any other page: a program the rate sheet stopped listing, while it lists the family with newer
+            # dates, is history ("Mortgage Rate Relief" lingering on /homebuying-guidance after June).
+            if all(r.kind != "rate_sheet" for r in group) and group[0].effective and \
+                    group[0].effective < sheet_date[group[0].family, group[0].business]:
                 self.retired[key] = group[0]
                 continue
             win = group[0]

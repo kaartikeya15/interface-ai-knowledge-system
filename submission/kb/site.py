@@ -10,7 +10,7 @@ from . import site_profile as site
 from .common import REFUSAL, Source, long_date, reply
 from .parse import MONTHS, page_kind, path_of
 from .rates import family_of
-from .search import query_tokens, tokens
+from .search import ALTERNATES, query_tokens, tokens
 
 ROUTING = re.compile(r"routing\s*(?:number|#|no\.?)?\W{0,12}(\d{9})\b", re.I)
 BRANCH_COUNT = site.BRANCH_COUNT
@@ -45,7 +45,8 @@ def routing(q, view):
 
 
 def branch_count(q, view):
-    if not re.search(r"\bhow many\b.*\b(branch|branches|locations|offices)\b|\bnumber of (branch |branches|locations)", q):
+    if not re.search(r"\bhow many\b.*\b(branch|branches|locations|offices)\b|\b(number|count) of\b.*\b(branch|branches|locations)\b|"
+                     r"\btotal\b.*\b(branches|locations)\b", q):
         return None
     dated = []
     for page in view.pages.values():
@@ -95,7 +96,8 @@ def hours(q, view):
     if not re.search(r"\b(hours?|open|close|closes|closing)\b", q):
         return None
     # "Are you open on Sunday?" asks about branches even without the word.
-    if not re.search(r"\b(lobby|drive[- ]?(up|thru|through)|branch|branches)\b|" + DAY_NAME + r"|\bare you open\b", q):
+    if not re.search(r"\b(lobby|drive[- ]?(up|thru|through)|branch|branches)\b|" + DAY_NAME +
+                     r"|\bare you open\b|\b(what time|when) do you (open|close)\b", q):
         return None
     label = "Drive-up" if re.search(r"drive[- ]?(up|thru|through)", q) else "Lobby"
     if _specific_branch(q, view):
@@ -132,7 +134,20 @@ def _specific_branch(q, view) -> Optional[str]:
 BRANCH_IN = re.compile(r"\b(?:branch|branches|location|locations|office)\s+(?:in|near)\s+([a-z][a-z .'-]{1,30}?)\s*(?:\?|$|,| area\b| iowa\b| illinois\b| wisconsin\b)")
 
 
+def _street_named(street: str, q: str) -> bool:
+    """'a branch on Pennsylvania Avenue' names 3999 Pennsylvania Ave."""
+    words = [w for w in re.findall(r"[a-z]+", street.lower()) if len(w) > 3 and w not in ("road", "street", "drive", "avenue", "lane")]
+    return bool(words) and all(re.search(rf"\b{w}\b", q) for w in words)
+
+
 def branch_address(q, view):
+    if re.search(r"\b(address|located|location|where is)\b|\bbranch (on|at)\b", q):   # "address for dupaco in galena"
+        found = [b for b in branches(view) if re.search(rf"\b{re.escape(b['city'].lower())}\b", q)
+                 or _street_named(b["street"], q)]
+        if found and not _specific_branch(q, view):
+            lines = [f"{b['street']}, {b['city']}, {b['state']} {b['zip']}" for b in found]
+            return reply(f"{site.NAME}'s {found[0]['city']} {'branch is' if len(lines) == 1 else 'branches are'} at "
+                         + "; ".join(lines) + ".", [_src(view, found[0]["url"], lines[0])])
     place = BRANCH_IN.search(q)
     if place and re.search(r"\b(do you|is there|are there|any|have)\b", q):
         city = place.group(1).strip()
@@ -176,7 +191,9 @@ def specific_branch_hours(q, view):
     return reply(REFUSAL.format(what=f"hours for the {name.title()} branch"), [], confident=False)
 
 
-LINK_WORD = re.compile(r"\b(link|url|web ?page|web ?address|website|locator)\b|\bonline\b.*\bjoin\b|\bjoin\b.*\bonline\b")
+LINK_WORD = re.compile(r"\b(link|url|web ?page|web ?address|website|locator)\b|\bwhere\b.*\b(on|from) (your|the) site\b|"
+                       r"\b(online|internet)\b.*\b(join|apply|become a member)\b|"
+                       r"\b(join|apply|become a member)\b.*\b(online|internet)\b|\bwhere (?:do|can) i apply\b")
 
 
 def _canonical(url: str) -> str:
@@ -203,7 +220,10 @@ def link(q, view):
         return None
     url = _rates_link(q, view)
     if not url:
-        wanted = set(query_tokens(q)) - {"link", "url", "website", "use", "see", "web", "page", "site"}
+        wanted = set(query_tokens(q)) - {"link", "url", "website", "use", "see", "web", "page", "site", "online", "internet"}
+        if re.search(r"\bbecome a member\b", q):   # the topic is joining, not member services
+            wanted = (wanted - {"become", "member"}) | {"join"}
+        wanted |= {a for t in wanted for a in ALTERNATES.get(t, ())}   # "car loan" finds the auto-loan application
         score = Counter()
         for page in view.pages.values():
             for text, target in MD_LINK.findall(page.markdown):
@@ -219,27 +239,43 @@ def link(q, view):
     return reply(f"You can use {url}", [_src(view, url)])
 
 
-FEE_WORD = re.compile(r"\b(fees?|charges?|charged|cost|costs|price|how much)\b")
+FEE_WORD = re.compile(r"\b(fees?|charges?|charged|cost|costs|price|how much|pay|paying)\b")
 FEE_LINE = re.compile(r"^(.{4,90}?)\s+(\$\d[\d,.]*\*?.*|Free.*|\d+% .*|Price varies.*|Available at no charge.*)$")
 FEE_EFFECTIVE = re.compile(rf"Effective ((?:{MONTHS}) \d{{1,2}}, \d{{4}})")
 # How members name an item -> how the schedule names it.
 FEE_TERMS = {"overdrawn": "overdraft", "nsf": "overdraft", "bounce": "overdraft", "bounced": "overdraft",
-             "cashier": "official", "rekey": "key", "notarize": "notary", "notarized": "notary", "coins": "coin"}
+             "cashier": "official", "rekey": "key", "notarize": "notary", "notarized": "notary", "coins": "coin",
+             # one idea, several words: the schedule's word is the value
+             "abroad": "foreign", "overseas": "foreign", "international": "foreign", "outside": "foreign",
+             "receive": "incoming", "receiving": "incoming", "inbound": "incoming",
+             "outgoing": "domestic", "stopping": "stop", "stopped": "stop", "cancel": "stop",
+             "another": "nondupaco", "other": "nondupaco", "different": "nondupaco", "nondupaco": "nondupaco",
+             "oversea": "foreign", "boxe": "box", "lockbox": "box"}   # stemmed forms: "overseas", "boxes"
 FEE_GENERIC = {"fee", "charge", "charged", "cost", "much", "price", "transfer", "consumer", "my", "per", "each", "item",
-               "send", "get", "new", "account", "do", "non", "member"}
+               "send", "get", "new", "account", "do", "non", "member", "pay", "paying", "anything", "use", "using",
+               "bank", "money", "when", "will", "service", "not", "no", "if", "im"}   # never the item being priced
+CHEAPEST = re.compile(r"\b(smallest|cheapest|least expensive|lowest|minimum)\b")
+
+
+def _root(word: str) -> str:
+    """'cashing' -> 'cash', 'counter' -> 'count': one word in two forms on a fee line."""
+    return re.sub(r"(ing|ed|er)$", "", word) if len(word) > 5 else word
 
 
 def _fee_lines(page):
     """(item, value, section) for each priced line; section headers are the unpriced lines between them."""
-    section, out = "", []
+    section, previous, out = "", "", []
     for raw in page.markdown.split("\n"):
         line = raw.strip().strip("|").replace("|", " ").replace("&amp;#45;", "-")
         line = re.sub(r"\s+", " ", line).strip()
+        line = re.sub(r"(?i)\bnon-dupaco\b", "nondupaco", line)   # keep "non-Dupaco ATM" one idea
         m = FEE_LINE.match(line)
-        if m:
+        if m and line.startswith("(") and section:   # continues the item named on the line above
+            out.append((f"{section} {m.group(1).strip()}", m.group(2).strip().replace("*", ""), previous))
+        elif m:
             out.append((m.group(1).strip(), m.group(2).strip().replace("*", ""), section))
         elif 3 < len(line) < 60 and not re.search(r"[.$*]", line) and line[:1].isupper():
-            section = line
+            previous, section = section, line
     return out
 
 
@@ -255,25 +291,45 @@ def fees(q, view):
         return None
     _, _, page = max(schedules, key=lambda s: (s[0], s[1]))
     asked = {FEE_TERMS.get(t, t) for t in query_tokens(q)}
-    wanted = asked - FEE_GENERIC - {"business"}
+    wanted = asked - FEE_GENERIC - {"business"} - set(tokens(" ".join(CHEAPEST.findall(q))))   # "smallest" picks, not names
     if not wanted:
         return None
     business = "business" in q
     key = view.index.rarest(wanted)
-    scored = []
-    for name, value, section in _fee_lines(page):
-        terms = {FEE_TERMS.get(t, t) for t in tokens(name)}
-        if ("business" in f"{name} {section}".lower()) != business:
-            continue
-        shared = wanted & terms
-        if key in terms and len(shared) / len(wanted) >= FEE_MIN_COVERAGE:
-            scored.append((-len(shared), len(name), name, value))
+    scored = _fee_matches(page, wanted, key, business)
+    note = ""
+    if not scored and not business:   # the only price the schedule has may be the business one ("rolled coin")
+        scored, note = _fee_matches(page, wanted, key, True), " (listed under business services)"
     if not scored:
         return None   # the schedule calls itself non-inclusive, so a miss means "look elsewhere", not "unpublished"
     top = min(s[0] for s in scored)
     best = sorted(s for s in scored if s[0] == top)
-    text = "; ".join(f"{name}: {value}" for _, _, name, value in best[:4])
+    if CHEAPEST.search(q) and len(best) > 1:   # "the smallest box": the lowest price among the plain items
+        def extra(b):   # words beyond what was asked, sizes aside: "past due late fee" is not a box
+            return len({t for t in tokens(b[2]) if not re.fullmatch(r"\d+|[a-z]", t)} - wanted)
+        plain = min(extra(b) for b in best)
+        priced = [b for b in best if re.search(r"\$\d", b[3]) and extra(b) == plain]
+        if priced:
+            best = [min(priced, key=lambda b: float(re.search(r"\$([\d,]+(?:\.\d+)?)", b[3]).group(1).replace(",", "")))]
+    text = "; ".join(f"{name}: {value}" for _, _, name, value in best[:4]) + note
     return reply(text + ".", [_src(view, page.url, text)])
+
+
+def _fee_matches(page, wanted, key, business):
+    scored = []
+    for name, value, section in _fee_lines(page):
+        own = {FEE_TERMS.get(t, t) for t in tokens(name)}
+        heading = {FEE_TERMS.get(t, t) for t in tokens(section)}
+        if ("business" in f"{name} {section}".lower()) != business:
+            continue
+        # The section header ("Debit Card Service Charges") says what a line is about, but a line must also
+        # name something asked for itself; a header alone once matched every line beneath it.
+        own = {t for t in wanted if any(_root(t) == _root(u) for u in own)} | own   # "cash" ~ "cashing", "counter" ~ "counting"
+        heading = {t for t in wanted if any(_root(t) == _root(u) for u in heading)} | heading
+        shared = wanted & (own | heading)
+        if key in own | heading and wanted & own and len(shared) / len(wanted) >= FEE_MIN_COVERAGE:
+            scored.append((-len(shared), len(name), name, value))
+    return scored
 
 
 HOLIDAY = re.compile(r"\b(holidays?|labor day|memorial day|thanksgiving|christmas( day| eve)?|new year'?s|"
@@ -303,7 +359,16 @@ FOUNDED = site.FOUNDED
 
 
 def organization(q, view):
-    """Who runs the credit union and when it started: stated in releases and on its own pages."""
+    """Who runs the credit union, where it serves and when it started: stated in releases and on its own pages."""
+    if re.search(r"\b(how many|what|which|number of)\b.*\b(counties|states)\b|\bservice area\b|\bwhere does .* serve\b", q):
+        dated = sorted(((p.published, p.url, m) for p in view.pages.values() if p.published
+                        for m in [SERVES.search(p.markdown)] if m), key=lambda x: (x[0], x[1]))
+        if dated:
+            when, url, m = dated[-1]
+            older = sorted({d[2].group(1) for d in dated if d[2].group(1) != m.group(1)})
+            note = f"Older releases say {', '.join(older)}; the newest dated release wins." if older else None
+            return reply(f"{site.NAME} serves residents in {m.group(1)} counties throughout {m.group(2)}, per its most recent"
+                         f" press release ({long_date(when)}).", [_src(view, url, m.group(0))], conflict_note=note)
     if re.search(r"\b(ceo|president|chief executive|who runs|who leads|head of)\b", q):
         named = sorted(((p.published, m.group(1), p.url) for p in view.pages.values() if p.kind == "news" and p.published
                         for m in [LEADER.search(p.markdown)] if m), reverse=True)
@@ -335,7 +400,9 @@ CLOSING = re.compile(rf"(?:clos\w+|last day)[^.\n]{{0,60}}?((?:{MONTHS}) \d{{1,2
 def branch_status(q, view):
     """Has a named branch closed? Compares the announced date with the date of this view."""
     name = _specific_branch(q, view)
-    if not name or not re.search(r"\b(open|close|closes|closed|closing|shut)\b", q):
+    if not name or not re.search(r"\b(open|close|closes|closed|closing|shut|still|last day)\b", q):
+        return None
+    if re.search(r"\b(which|where|instead|other|alternative|nearest|closest)\b", q):   # asks where to go, not when it closed
         return None
     key = name.replace("-", "")
     for page in sorted(view.pages.values(), key=lambda p: (p.published or date.min, p.url), reverse=True):

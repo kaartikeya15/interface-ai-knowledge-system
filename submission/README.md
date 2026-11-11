@@ -15,7 +15,7 @@ The crawled snapshots are not in this repository (the data may not be redistribu
 
 ```bash
 python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl   # practice set: 0.969
-python -m unittest discover -s submission/tests -v                                 # 31 unit tests, made-up pages only
+python -m unittest discover -s submission/tests -v                                 # 39 unit tests, made-up pages only
 ```
 
 ## How it works
@@ -54,5 +54,6 @@ python -m unittest discover -s submission/tests -v                              
 |---|---|
 | Public practice set (40) | 0.969, no stale values repeated |
 | Own held-out sets (171 questions in four sets) | 0.77 to 1.0; see NOTES for first-run scores |
+| Eight fresh test rounds (319 questions), first runs | Last three in a row: 0.859, 0.854, 0.895 (no stale values) |
 | Kit self-test | 0.83 (conflict F1 1.0) |
 | With the optional LLM (Groq free tier) | fresh2 0.954 to 0.996, fresh3 0.769 to 0.938; no question worse |

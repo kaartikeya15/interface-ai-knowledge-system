@@ -21,12 +21,12 @@ SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z“\"])")
 VALUE_QUESTION = re.compile(r"\b(rates?|apy|apr|fees?|hours?|interest|how much|cost|costs)\b")
 # A date written into the question ("on May 15, 2026", "in May 2026") is an as-of date.
 QUESTION_DATE = re.compile(rf"\b(?:({MONTHS})\.? (\d{{1,2}})(?:st|nd|rd|th)?,? (\d{{4}})|({MONTHS}),? (\d{{4}})|"
-                           rf"(\d{{4}}-\d{{2}}-\d{{2}}))\b", re.I)
+                           rf"(\d{{4}}-\d{{2}}-\d{{2}})|(\d{{1,2}})/(\d{{1,2}})/(\d{{4}}))\b", re.I)
 # "Did the 12-month rate change?" asks for history, not just today's value.
-MOVED = r"(?:chang\w*|go(?:ne)? (?:up|down)|went (?:up|down)|increas\w*|decreas\w*|rais\w*|lower\w*|drop\w*|cut)"
+MOVED = r"(?:chang\w*|mov(?:ed|e)|go(?:ne)? (?:up|down)|went (?:up|down)|increas\w*|decreas\w*|rais\w*|lower\w*|drop\w*|cut)"
 CHANGE = re.compile(
     rf"^(?:did|has|have|was|were|is|are)\b.*\b{MOVED}\b"                       # "did the 12-month rate change?"
-    rf"|\bhow (?:has|have) .* chang\w*|\bwhen did\b.*\b{MOVED}"               # "how has it changed?", "when did it change?"
+    rf"|\bhow (?:has|have|did) .* chang\w*|\bwhen did\b.*\b{MOVED}"               # "how has it changed?", "when did it change?"
     r"|\bbefore (?:it|they|the \w+) (?:chang\w*|went|was|were)\b|\bused to (?:be|pay|cost)\b"   # "what was it before?"
     r"|\b(?:higher|lower|more|less|better|worse)\b.*\b(?:now than|than (?:in|on|at|before|last|it was))\b")
 EFFECTIVE_NOTE = re.compile(r" \(rates effective [^)]*\)")
@@ -66,6 +66,19 @@ def parse_as_of(as_of) -> Optional[date]:
         return date.fromisoformat(s[:10])
     except ValueError:
         return None
+
+
+def _window(text: str, question: str, view, width: int = 350) -> str:
+    """The part of a long passage the question is about: "Rolled coin $0.10" can sit 600 characters into a fee list."""
+    if len(text) <= width:
+        return text
+    words = sorted(set(query_tokens(question)), key=lambda t: -view.index.weight(t))
+    low = text.lower()
+    at = next((low.find(w) for w in words if low.find(w) > width - 80), -1)
+    if at < 0:
+        return text[:width]
+    start = max(0, at - 120)
+    return "..." + text[start:start + width]
 
 
 class KnowledgeBase:
@@ -126,8 +139,10 @@ class KnowledgeBase:
                     month = datetime.strptime(m.group(4).title(), "%B").month
                     year = int(m.group(5))
                     days.append(date(year, month, monthrange(year, month)[1]))   # "in May" means as May ended
-                else:
+                elif m.group(6):
                     days.append(date.fromisoformat(m.group(6)))
+                else:   # US order: 5/20/2026
+                    days.append(date(int(m.group(9)), int(m.group(7)), int(m.group(8))))
             except ValueError:   # "February 30": not a real date, so it sets no as-of date
                 continue
         return days
@@ -211,14 +226,16 @@ class KnowledgeBase:
         if is_rate:
             hits = [h for h in hits if STATED_RATE.search(h[2].text) and h[2].kind in CURRENT_VALUE_KINDS]
         elif re.search(r"\b(how much|cost|costs|fees?|price|charge)\b", q):   # a cost question needs a price
-            hits = [h for h in hits if re.search(r"\$\d|\bfree\b|\bno (?:fee|charge|cost)\b|\d%", h[2].text, re.I)]
+            hits = [h for h in hits if re.search(r"\$\d|\bfree\b(?! up)|\bno (?:fee|charge|cost)\b|\d%", h[2].text, re.I)]
+            item = view.index.rarest(wanted)   # ... for the thing asked about: a replacement card, not any card fee
+            hits = [h for h in hits if item in set(tokens(h[2].heading + " " + h[2].text)) | h[2].path_terms]
         elif is_value:
             hits = [h for h in hits if re.search(r"\d", h[2].text)]
         return hits
 
     def _pick(self, hits, question, q, view, names, is_rate):
         """Choose among surviving passages: a named subject's own page, then product pages, then the newest article."""
-        if names and not is_rate and re.match(r"(what|tell|has|have|who)\b", q):
+        if names and not is_rate and re.match(r"(what|tell|has|have|who|did)\b", q):
             found = self._about(hits, names, question, view)
             if found:
                 return self._cite(found[0], found[1], view), "named"
@@ -272,7 +289,7 @@ class KnowledgeBase:
         for p in pool:
             where = path_of(p.url)
             dated = f", {p.published}" if p.kind in DATED_KINDS and p.published else ""
-            listing.append(f"({p.kind} page {where}{dated}) {p.heading[:80]}: {p.text[:350]}")
+            listing.append(f"({p.kind} page {where}{dated}) {p.heading[:80]}: {_window(p.text, question, view)}")
         choice = self.llm.pick(question, listing)
         if choice is None:
             return None            # the layer could not decide: fall back to the rules
@@ -294,7 +311,11 @@ class KnowledgeBase:
         """Best sentences about a named thing: pages named after it first, then the newest page."""
         wanted = set(query_tokens(question))
         compound = "".join(names)
-        urls = {h[2].url for h in hits} | {u for u in view.pages if set(names) & path_terms(u)}
+        # Pages named after the subject count only if they also mention what is asked about it:
+        # "the Wi-Fi password at the Dubuque branch" is not answered by a page about Dubuque.
+        topic = view.index.rarest(wanted - set(names))
+        urls = {h[2].url for h in hits} | {u for u in view.pages if set(names) & path_terms(u)
+                                           and (topic is None or topic in tokens(view.pages[u].markdown))}
 
         def page_rank(url):
             page = view.pages[url]

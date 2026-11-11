@@ -7,10 +7,17 @@ from typing import Optional
 from .common import REFUSAL, long_date, reply, sources_for
 from . import site_profile as site
 from .parse import MONTHS
+from .search import stem
 
-RATE_WORD = re.compile(r"\b(rates?|apy|apr|dividends?|interest|yields?|pays?|earn|earns?|percent)\b|%")
+RATE_WORD = re.compile(r"\b(rates?|apy|apr|dividends?|interest|yields?|pays?|paying|earn|earns?|earning|percent)\b|%")
 WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-            "twelve": 12, "fifteen": 15, "seventeen": 17, "eighteen": 18, "twenty": 20, "thirty": 30}
+            "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+            "eighteen": 18, "nineteen": 19}
+TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+        "hundred": 100}
+# A make names a vehicle as surely as the word "car" does ("a used 2019 Honda").
+CAR_MAKES = (r"\b(honda|toyota|ford|chevy|chevrolet|nissan|hyundai|kia|subaru|jeep|dodge|ram|gmc|buick|cadillac|"
+             r"chrysler|mazda|volkswagen|vw|bmw|audi|lexus|acura|tesla|volvo|mitsubishi|lincoln|infiniti)\b")
 FAMILIES = [
     ("ira", r"\b(ira|iras|roth)\b|traditional ira"),
     ("certificate", r"\b(certificates?|cds?|share certs?|month (fixed )?special)\b|\bjumbo\b(?! (mortgage|loan|home))"),
@@ -18,7 +25,7 @@ FAMILIES = [
     ("home_equity", r"\b(heloc|home equity)\b"),
     ("home_improvement", r"\bhome improvement\b"),
     ("recreational", r"\b(boat|rv|camper|motor ?home|atv|snowmobile|jet ?ski|recreational)\b"),
-    ("auto", r"\b(auto|car|vehicle|motorcycle|truck|suv)\b"),
+    ("auto", r"\b(autos?|cars?|vehicles?|motorcycles?|trucks?|suvs?|minivans?|pickups?|sedans?)\b|" + CAR_MAKES),
     ("personal", r"\bpersonal loans?\b"),
     ("mortgage", r"\b(mortgages?|home loans?|refinance|refi|\d+[- ]year fixed|(?:10|15|20|25|30)[- ]year)\b"),
     ("deposit", r"\b(checking|savings?|money market|hsa|health savings|club|launchpad)\b"),
@@ -26,8 +33,10 @@ FAMILIES = [
 # Words that can sit in front of a product noun without naming a product variant.
 GENERIC_MODIFIER = set("""a an the my your our any this that of for on in to your new used fixed standard regular current
 home house car auto personal savings share business checking term rate interest online money
-my all do does is are what which how year years month months yr pay best highest top lowest""".split()) | site.NAME_WORDS
-PRODUCT_NOUN = re.compile(r"\b([a-z0-9/-]+) (?:rate )?(loans?|mortgages?|accounts?|savings|certificates?|cds?|checking)\b")
+my all do does is are what which how year years month months yr pay best highest top lowest
+lower higher better cheaper cheapest good great low high same other another typical average usual
+credit debit visa""".split()) | site.NAME_WORDS
+PRODUCT_NOUN = re.compile(r"\b([a-z0-9/-]+) (?:rate )?(loans?|mortgages?|accounts?|savings|certificates?|cds?|checking|cards?)\b")
 ACCOUNTS = site.QUESTION_ACCOUNT_NAMES
 
 
@@ -38,15 +47,22 @@ def asks_for_rate(q: str) -> bool:
 
 def _terms(q: str) -> tuple[Optional[int], Optional[int]]:
     """(months, years) mentioned in the question."""
-    t = re.sub(r"\b(" + "|".join(WORD_NUM) + r")\b", lambda m: str(WORD_NUM[m.group(1)]), q)
+    # "eighty-four month", "thirty six month", "sixty-month", "twelve month"
+    t = re.sub(r"\b(" + "|".join(TENS) + r")(?:[- ](" + "|".join(list(WORD_NUM)[:9]) + r"))?\b",
+               lambda m: str(TENS[m.group(1)] + (WORD_NUM[m.group(2)] if m.group(2) else 0)), q)
+    t = re.sub(r"\b(" + "|".join(WORD_NUM) + r")\b", lambda m: str(WORD_NUM[m.group(1)]), t)
     m = re.search(r"(\d+)[- ]?(?:months?|mos?)\b", t)
     y = re.search(r"(\d+)[- ]?(?:years?|yrs?)\b", t)
     return (int(m.group(1)) if m else None, int(y.group(1)) if y else None)
 
 
+SCALE = {"k": 1e3, "thousand": 1e3, "m": 1e6, "mil": 1e6, "million": 1e6}
+
+
 def _amounts(q: str) -> list[float]:
-    return [float(a.replace(",", "")) * (1000 if k else 1)
-            for a, k in re.findall(r"\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k\b)?", q)]
+    """'$30,000', '$45k', '$1.2 million'."""
+    return [float(a.replace(",", "")) * SCALE.get(k, 1) - (0.01 if below else 0)   # "under $5,000" is $4,999.99
+            for below, a, k in re.findall(r"(\b(?:under|below|less than)\s+)?\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|million|mil|m)?\b", q)]
 
 
 def _range(tier: str) -> Optional[tuple[float, float]]:
@@ -104,6 +120,16 @@ def _refuse_missing(view, what="that rate"):
 
 
 def family_of(q: str) -> Optional[str]:
+    fam = _family_named(q)
+    # "a 2025 Civic on a 60 month loan": a model year and a loan, with no other product named, is a vehicle
+    if not fam and re.search(r"\b(19[5-9]\d|20[0-4]\d) [a-z]+", q) and re.search(r"\bloans?\b|\bfinanc", q):
+        return "auto"
+    return fam
+
+
+def _family_named(q: str) -> Optional[str]:
+    if re.search(r"\b(savings|checking|money market)( account)?\b", q) and not re.search(r"\b(visa|credit cards?|ira|iras|roth|certificates?|cds?)\b", q):
+        return "deposit"
     for fam, pat in FAMILIES:
         if re.search(pat, q):
             return fam
@@ -115,18 +141,18 @@ LENDING = {"mortgage", "auto", "personal", "home_equity", "home_improvement", "r
 
 def _unlisted_product(q: str, view) -> bool:
     """'construction loan', 'bitcoin savings': a named variant no published rate row mentions."""
-    catalogue = " ".join(f"{f.row.title} {f.row.label}".lower() for f in view.facts.values())
+    catalogue = {stem(w) for f in view.facts.values() for w in re.findall(r"[a-z0-9/-]+", f"{f.row.title} {f.row.label}".lower())}
     for word, _ in PRODUCT_NOUN.findall(q):
         if word in GENERIC_MODIFIER or re.fullmatch(r"\d.*|.*\d", word) or word.endswith(("-month", "-year")):
             continue
-        if not re.search(rf"\b{re.escape(word)}\b", catalogue):
+        if stem(word) not in catalogue:   # "IRA certificate" against a table titled "IRAs"
             return True
     return False
 
 
 def answer_minimum(q: str, view):
     """Opening minimums sit in the same rows as the rates."""
-    joining = re.search(r"\bhow much\b.*\bjoin\b|\bminimum\b.*\bjoin\b", q)
+    joining = re.search(r"\b(how much|minimum)\b.*\b(join|become a member|membership)\b", q)
     if not joining and not (re.search(r"\bminimum\b|\bhow much\b.*\bopen\b", q) and re.search(r"\b(open|deposit)\b", q)):
         return None
     name = "Share Savings" if joining else next(_named_accounts(q), None)
@@ -141,11 +167,15 @@ def answer_rate(q: str, view):
     q = DATE_PHRASE.sub(" ", q)   # "in May 2026" is when, not a model year
     fam = family_of(q)
     months, years = _terms(q)
-    asks_rate = asks_for_rate(q) or bool(fam in LENDING and (months or years or re.search(r"\bhow much\b", q)))
+    # "what are you charging on mortgages": for a loan, the charge is its rate (a fee question never reaches a loan family)
+    asks_rate = asks_for_rate(q) or bool(fam in LENDING and (months or years or re.search(r"\b(how much|charging)\b", q)))
     # "6 month cd" or "bright savings apy?": a product and a term with no other words is asking its rate.
     asks_rate = asks_rate or bool(fam and (months or years) and len(re.findall(r"[a-z]+", q)) <= 5)
-    asks_rate = asks_rate or bool(fam in ("certificate", "ira") and re.search(r"\b(best|highest|top)\b", q))
-    if asks_rate and _unlisted_product(q, view):
+    asks_rate = asks_rate or bool(fam in ("certificate", "ira") and re.search(r"\b(best|highest|top|most)\b", q))
+    asks_rate = asks_rate or bool(fam in ("certificate", "ira") and (months or years))   # "the 10 month special"
+    asks_rate = asks_rate or bool(fam in ("certificate", "ira") and re.search(r"\b(terms?|lengths?|options|choices|kinds|types|specials|available)\b", q))
+    specific = next((n for n in _named_accounts(q) if n != "Share Savings" or "share savings" in q), None)   # not bare "savings"
+    if asks_rate and _unlisted_product(q, view) and not (fam == "deposit" and specific):
         return _refuse_missing(view)
     if not fam or not asks_rate and not re.search(r"\bcards?\b.*\boffer|\boffer\b.*\bcards?\b", q):
         return None
@@ -187,6 +217,16 @@ def _prose_rate(q, view, fam):
                  [Source(url=f.url, snapshot_id=view.snapshot_id, quote=f.quote) for f in chosen])
 
 
+def _negated(word: str, q: str) -> bool:
+    """'not jumbo', 'non-jumbo', 'no jumbo', 'without the jumbo': the member rules the qualifier out."""
+    return bool(re.search(rf"\b(?:not|non|no|without|excluding|don't want|isn't)\b[- ]?(?:[a-z']+ ){{0,3}}?{word}\b", q))
+
+
+def _minimum(row) -> Optional[float]:
+    m = re.search(r"\$([\d,]+(?:\.\d+)?)", row.cells.get("Min. to Earn", "") or "")
+    return float(m.group(1).replace(",", "")) if m else None
+
+
 def _by_term(facts, months):
     return [f for f in facts if _months_of(f.row.label) == months]
 
@@ -198,9 +238,16 @@ def _certificate(q, view, fam, business):
     if months:
         facts = _by_term(facts, months)
     for word in ("jumbo", "special", "roth", "traditional"):
-        if word in q:
+        if _negated(word, q) or (word == "jumbo" and word not in q and re.search(r"\b(regular|standard)\b.*\bspecial\b", q)):
+            facts = [f for f in facts if word not in f.row.label.lower()]
+        elif word in q:
             facts = [f for f in facts if word in f.row.label.lower()]
     amounts = _amounts(q)
+    if amounts and fam == "certificate":
+        budget = amounts[0]
+        short = re.search(r"\b(don't have|do not have|less than|under|below|only have|can't afford)\b", q)
+        fits = [f for f in facts if (m := _minimum(f.row)) is None or (m < budget if short else m <= budget)]
+        facts = fits or facts
     if fam == "ira" and (amounts or "variable" in q):
         tiered = [f for f in facts if "$" in f.row.label]
         fits = [f for f in tiered if amounts and (r := _range(f.row.label.split(": ")[-1])) and r[0] <= amounts[0] <= r[1]]
@@ -224,15 +271,22 @@ def _loan_cap(label: str) -> float:
 def _mortgage(q, view, fam, business):
     kind = "refinance" if re.search(r"\brefi", q) else "purchase"
     facts = [f for f in view.rows(fam) if f.row.label.lower().startswith(kind)]
+    # A program named in its own row ("Mortgage Rate Relief Program"): the question's distinctive word picks it.
+    asked = set(re.findall(r"[a-z]{4,}", q)) - MORTGAGE_WORDS
+    named = [f for f in view.rows(fam) if not re.match(r"(purchase|refinance)", f.row.label.lower())
+             and asked & set(re.findall(r"[a-z]{4,}", f.row.label.lower()))]
+    if named:
+        return _finish(view, named, [f"{f.row.label}: {_describe(f.row)}" for f in named])
     _, years = _terms(q)
     if years:
         facts = [f for f in facts if f"{years}-year" in f.row.label.lower()]
     amounts = _amounts(q)
     if amounts and facts:
         fits = [f for f in facts if _loan_cap(f.row.label) >= amounts[0]]
-        if fits:
-            cap = min(_loan_cap(f.row.label) for f in fits)
-            facts = [f for f in fits if _loan_cap(f.row.label) == cap]
+        if not fits:
+            return _refuse_missing(view, "a rate for a loan that size")
+        cap = min(_loan_cap(f.row.label) for f in fits)
+        facts = [f for f in fits if _loan_cap(f.row.label) == cap]
     if not facts:
         return _refuse_missing(view)
 
@@ -241,6 +295,11 @@ def _mortgage(q, view, fam, business):
         return (-int(y.group(1)) if y else 0, _loan_cap(f.row.label))
     facts.sort(key=order)
     return _finish(view, facts, [f"{re.sub(r'(?i)conventional ', '', f.row.label)}: {_describe(f.row)}" for f in facts])
+
+
+MORTGAGE_WORDS = {"mortgage", "mortgages", "rate", "rates", "fixed", "year", "years", "conventional", "loan", "loans",
+                  "purchase", "refinance", "program", "programs", "home", "homes", "what", "there", "with", "that",
+                  "this", "your", "have", "does", "current", "qualified", "borrowers", "apr"}
 
 
 def _model_years(label: str) -> tuple[int, int]:
@@ -286,7 +345,8 @@ def _card(q, view, fam, business):
         facts = [f for f in facts if not f.row.business]
     if named:
         facts = [f for f in facts if any(w in f"{f.row.title} {f.row.label}".lower() for w in named)]
-    wants_intro = re.search(r"\b(intro|introductory|balance transfer)\b", q)
+    # "after the intro period ends" asks for the rate that follows the intro
+    wants_intro = re.search(r"\b(intro|introductory|balance transfer)\b", q) and not re.search(r"\bafter\b.*\bintro|\bintro\w* (period )?(ends|is over)", q)
     facts = [f for f in facts if bool(wants_intro) == ("intro" in f.row.label.lower())] or facts
     if not facts:
         return _refuse_missing(view)
@@ -308,7 +368,10 @@ def _named_accounts(q):
 
 def _deposit(q, view, fam, business):
     facts = view.rows(fam, business)
-    if "checking" in q and not re.search(r"(1st|first) rate|free", q):
+    specific = next((n for n in _named_accounts(q) if n != "Share Savings" or "share savings" in q), None)
+    if not specific and re.search(r"\b(which|what)\b.*\b(account|savings)\b", q) and re.search(r"\b(highest|best|top|most)\b", q):
+        chosen = [f for f in facts if "savings" in f.row.label.lower() or "money market" in f.row.label.lower()]
+    elif "checking" in q and not re.search(r"(1st|first) rate|free", q):
         chosen = [f for f in facts if "checking" in f.row.label.lower()]
     else:
         name = next(_named_accounts(q), None)
@@ -365,5 +428,7 @@ def _term_loan(q, view, fam, business):
         facts = fits or facts
     if not facts:
         return _refuse_missing(view)
+    if re.search(r"\b(best|lowest|cheapest)\b", q) and not months:   # for a loan, the best rate is the lowest
+        facts = [min(facts, key=lambda f: (_top(f.row), f.row.label))]
     facts.sort(key=lambda f: (f.row.title, _months_of(f.row.label) or 0, f.row.label))
     return _finish(view, facts, [f"{f.row.title}, {f.row.label}: {_describe(f.row)}" for f in facts])

@@ -14,9 +14,10 @@ TOKEN = re.compile(r"[a-z0-9]+")
 STOP = set("""a about all am an and any are as at be been but by can could did do does for from get give
 had has have how i if in is it its just like me my need of on or our please provide s should so tell than that the
 their them then there these they this to us was we were what when where which who why will with would you your
-going today any some want looking know options option new
+going today any some want looking know options option new ever
 whats hows wheres much many hi hello hey thanks thank yes ok okay don doesn didn isn aren wasn won""".split()) | site.NAME_WORDS
 FAQ_EXTRA_WORD = 0.5    # a word only the FAQ has counts half: FAQs add context ("for Apple Pay") the member leaves out
+KEY_WORD_MARGIN = 0.1   # an FAQ with the most specific word wins over one without it unless clearly behind
 FAQ_WITHOUT_KEY = 0.67  # an FAQ missing the question's most specific word must match two thirds of everything else
 TRUST = {"product": 0, "rate_sheet": 0, "landing": 1, "file": 1, "calculator": 2, "blog": 3, "news": 4}   # tie-break
 WEIGHT = {"rate_sheet": 1.2, "product": 1.3, "news": 1.0, "landing": 0.7, "file": 0.7, "blog": 0.8, "calculator": 0.2}
@@ -42,7 +43,9 @@ SYNONYMS = {"cd": "certificate", "eligible": "join", "eligibility": "join", "wal
 ALTERNATES = {"car": {"auto"}, "vehicle": {"auto"}, "auto": {"car"}, "house": {"home", "homebuying"},
               "buy": {"homebuying", "purchase"}, "buying": {"homebuying", "purchase"}, "quickly": {"long"},
               "fast": {"long"}, "daily": {"day"}, "day": {"daily"}, "fee": {"charge", "cost"}, "charge": {"fee", "cost"},
-              "cost": {"fee", "charge"}, "qualify": {"eligibility", "eligible", "requirement"}}
+              "cost": {"fee", "charge"}, "qualify": {"eligibility", "eligible", "requirement"},
+              "put": {"contribute", "deposit", "invest"}, "most": {"maximum", "max"}, "least": {"minimum", "min"},
+              "long": {"term"}, "skip": {"defer"}, "college": {"school"}, "university": {"school"}}
 
 
 def tokens(text: str) -> list[str]:
@@ -151,7 +154,8 @@ class Index:
     def rarest(self, terms) -> Optional[str]:
         """The most specific word of a question: whatever answers it has to mention this."""
         terms = list(terms)
-        return max(terms, key=lambda t: (self.weight(t), t)) if terms else None
+        # A number ("I'm 55", "$30,000") is a value in the question, not its topic, even when the site never uses it.
+        return max(terms, key=lambda t: (not t.isdigit(), self.weight(t), t)) if terms else None
 
     def search(self, query: str, limit: int = 12, kinds: Optional[set] = None):
         """Returns (score, coverage, passage); coverage = share of query weight the passage contains.
@@ -216,10 +220,11 @@ class Index:
     def faq(self, query: str):
         """Best FAQ for the member's question. The member's words count in full; words only the FAQ has count half,
         so 'Do I need a special phone?' still fits 'do I need a special phone for apple pay'."""
-        q = set(query_tokens(OFFER.sub("do you offer", query.lower())))   # FAQs ask "does Dupaco offer"
+        q = {t for t in query_tokens(OFFER.sub("do you offer", query.lower())) if not t.isdigit()}   # "I'm 55" is a value
         if not q:
             return None
         best, best_score = None, 0.0
+        keyed, keyed_score = None, 0.0   # the best FAQ that contains the most specific word
         key = self.rarest(q)
         q_weight = sum(self.weight(t) for t in q)
         for terms, p in self.faqs:
@@ -234,4 +239,10 @@ class Index:
             score = shared / ((q_weight + FAQ_EXTRA_WORD * sum(self.weight(t) for t in terms - echoed)) or 1.0)
             if score > best_score or (score == best_score and best and (TRUST[p.kind], p.url) < (TRUST[best.kind], best.url)):
                 best, best_score = p, score
+            if found[key] and (score > keyed_score or (score == keyed_score and keyed and
+                                                       (TRUST[p.kind], p.url) < (TRUST[keyed.kind], keyed.url))):
+                keyed, keyed_score = p, score
+        # "Do my points ever expire?": the FAQ about expiring beats a slightly closer one about redeeming.
+        if keyed and keyed is not best and keyed_score >= best_score - KEY_WORD_MARGIN:
+            return keyed_score, keyed
         return (best_score, best) if best else None

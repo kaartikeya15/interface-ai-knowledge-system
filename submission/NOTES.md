@@ -15,10 +15,12 @@ Everything specific to this website (page paths, the press-release boilerplate, 
 
 In order:
 
-1. **The as-of date picks the snapshot:** the latest snapshot taken on or before that date. A date written in the question ("on May 15, 2026", "in May 2026") counts as an as-of date if it is before the newest snapshot; a month means its last day. Before the first snapshot, the answer is "I don't know".
+1. **The as-of date picks the snapshot:** the latest snapshot taken on or before that date. A date written in the question ("on May 15, 2026", "in May 2026", "5/20/2026") counts as an as-of date if it is before the newest snapshot; a month means its last day. Before the first snapshot, the answer is "I don't know".
 2. **The newest stated effective date wins.** Crawl date proves nothing here: a stale calculator page and a stale mortgage widget were recrawled every time. `/homebuying-guidance` still showed April rates in the September crawl.
 3. **Then page authority:** rate sheet, then product page, then press release or file, then blog, then calculator. Calculators are never a source for a rate.
-4. **A tier found only on a promotional page is retired.** `/switch-and-earn` still lists a `2023-26` auto tier the rate sheet dropped.
+4. **A row the rate sheet dropped is retired.** If a row appears only on promotional or other pages, while the rate sheet still lists that product family (personal and business apart) with a newer effective date, the row is history.
+   - `/switch-and-earn` still lists a `2023-26` auto tier the rate sheet dropped.
+   - `/homebuying-guidance` still offered the April "Mortgage Rate Relief Program" in September.
 5. **For claims that drift, the newest dated release wins, not the majority.** "23 branch office locations" appears on more pages than 22, but releases switch from 23 to 22 around the Hy-Vee branch closing on March 31, 2026. A vote gives the wrong answer.
 6. **Table rates beat sentences.** Sentence-stated rates are used only for a product that has no rate table, so marketing copy can never override the rate sheet.
 
@@ -29,6 +31,13 @@ In order:
 - **An answer must mention the question's most specific word.** For a short question that is its rarest word; for a wordy one, two of its four rarest. A word the site never uses counts as the most specific of all, so "What's your SWIFT code?" is refused instead of matched to a page about "code entry".
 - **Product pages speak for Dupaco.** When a product page and an article both match, the product page wins. A member asking about a service is not answered from a loosely related article about someone else.
 - **Cost questions need a price.** A passage without a dollar amount, a percentage or "free" cannot answer "how much".
+- **Qualifiers can be ruled out, not only in.** "Not the jumbo one", "non-jumbo" and "regular … special" exclude jumbo rows. "I don't have $100,000" excludes certificates with that minimum, and "I have $150K" excludes higher ones.
+- **For a loan, "best" means the lowest rate.** For savings it means the highest, compared across accounts when no account is named.
+- **Amounts and terms can be written in any common form.** "$1.2 million", "$45k" and "under $5,000" (meaning $4,999.99) all work, as do "eighty-four month" and "2yr".
+- **Fees are matched on the schedule's own words.** "Overseas", "abroad" and "international" mean foreign; "receive" means incoming; "another bank's ATM" means non-Dupaco. A line's section header counts towards a match, but a line must also name something asked for itself.
+  - Items split over two lines are joined.
+  - "Smallest" or "cheapest" picks the lowest price among the plain items.
+  - A business-only price is given, and labelled as such, when it's the only one.
 - **FAQs are matched question to question.** The member's words count in full and words only the FAQ has count half. Word forms are merged ("deposited" and "deposit"), and a few member terms map to site terms ("overdraw" to "overdrawn", "cashier's check" to "official check").
 
 ## When it says "I don't know"
@@ -44,7 +53,7 @@ Refusals contain no digits on purpose: they must not state any value.
 
 ## Testing
 
-Answer keys in my own sets were read from the raw snapshot files. "First run" means the set was scored before I looked at any of its failures. That is the only clean estimate, because every set was used for fixes afterwards.
+Answer keys in my own sets were read from the raw snapshot files before the system was run on them. "First run" means the set was scored before I looked at any of its failures. That is the only clean estimate, because every set was used for fixes afterwards.
 
 | Set | Questions | First run | Now | What it covers |
 |---|---|---|---|---|
@@ -54,20 +63,43 @@ Answer keys in my own sets were read from the raw snapshot files. "First run" me
 | `eval_own/fresh2.jsonl` | 35 | 0.571 before the second round of fixes, **0.796** after | 0.954 | Fees, site FAQs, past dates, refusals |
 | `eval_own/fresh3.jsonl` | 16 | **0.706** | 0.769 | Everyday questions, mostly site FAQs |
 | Kit self-test (synthetic site) | 5 + 1 conflict | 0.17 overall | **0.83** overall | Sentence-stated rates and an expired offer; conflict F1 1.0 |
+| `eval_own/golden.jsonl` | 50 | **0.692** | 0.960 | Everyday wording, tiers, fees, as-of dates, change, refusals |
+| `eval_own/round1.jsonl` to `round8.jsonl` | 319 | see below | 0.90 to 1.0 | Eight fresh sets, one per round |
 
-**My estimate for unseen questions:** about 0.95 on table questions like the public set, and 0.70 to 0.80 on everyday questions answered by site FAQs. The hidden set's mix decides where it lands.
+**Testing until it held.** After the golden set I tested in rounds. Each round was a new set of about 40 questions, scored once, rules only (what a scorer without keys runs). I set the bar before seeing any result: at least 0.85, no stale values and no errors, three rounds in a row.
+
+- **Between rounds:** I fixed only general causes (plurals, negation, word forms, routing gaps, a stale-row rule), never a single question, and re-ran every earlier set and the unit tests.
+- **Fixes that cost an earlier set were reverted.** One example: scoring links by their best single mention instead of the sum.
+- **Rounds 4 to 6 reworded the 40 public questions** and use the kit's own answer keys. The brief says the hidden set contains rewordings of them.
+
+| Round | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| First run | 0.773 | 0.761 | 0.772 | 0.813 | 0.912 (1 stale value) | **0.859** | **0.854** | **0.895** |
+| Passed | no | no | no | no | no | yes | yes | yes |
+
+**Seven of my own keys in the rounds were wrong, and I corrected them before recording a round's score.** My rule for a correction: a key is wrong only if a correct, complete answer would fail it.
+- Two treated a jumbo rate as a trap when the question did not say "regular".
+- One read a 15-year refinance rate from the cash-out table; the system had it right.
+- One required a rate for a yes/no question.
+- One expected a refusal where "no intro rate now, the standard rate is 6.25%" is the correct answer.
+- Two refusal questions listed a source page, which a correct refusal cannot cite.
+
+Separately, the conflict stand-in had an entry that was really another product's tier, and is now 7 entries.
+
+**My estimate for unseen questions: about 0.85 to 0.90 rules-only.** That's the last three first runs, not the 0.97 the much-used practice set shows. The LLM layer adds a few points where wording differs (see below).
 
 **Conflicts:** the kit ships no gold list, so I built a stand-in from the 7 public questions whose trap value really appears in the snapshots. The system lists all 7 with the right winner when they are scored together. Scored alone, the 84-month auto entry loses its match to the 60-month one, because the scorer takes the first entry that shares a value. 7 of its 17 entries match the stand-in, which is a floor on precision, since the real list is longer. Several public traps (a routing number of 271176899, a 9.9% card APR, a 6.7% mortgage rate, `info.dupaco.com` links) appear in no snapshot, so I treated them as errors by an older system, not as site contradictions.
 
 **Why conflicts are one entry per product and term:** I tried one entry per tier (34 entries instead of 17). On the stand-in it scored worse: F1 fell from 0.58 to 0.34, and the right winner from 1.0 to 0.86, because the scorer matched the 84-month entry to the wrong tier. Merged entries say plainly that tiers are separate facts, give each tier's current value in the resolution, and list the superseded values. A scan of the newest snapshot found no sentence-stated rate that contradicts a rate table and goes unreported. The one mismatch is a separate program's rate in a press release.
 
-**Unit tests** (`tests/test_kb.py`, 31 tests, stdlib `unittest`). They use made-up pages, so no crawled data is copied. They cover:
+**Unit tests** (`tests/test_kb.py`, 39 tests, stdlib `unittest`). They use made-up pages, so no crawled data is copied. They cover:
 - table parsing into typed rows;
 - tiers as separate facts;
 - calculators never being a source;
 - a newer effective date beating page authority, and the rate sheet winning a tie;
 - as-of selection, including a date written in the question;
 - other ways of asking about change, and a change window ending at its later date;
+- wording rules: number words, plurals and car makes, numeric dates, fee vocabulary, split fee lines, "smallest", amount forms, and retiring a row the rate sheet dropped;
 - refusals with no digits;
 - odd input, conflicts, determinism, and the LLM layer (off without a key, falls back and stays fallen back after an error, reads replies safely).
 
@@ -103,16 +135,28 @@ Everyday wording that differs from the site's ("will mobile payments cost me ext
 
 **Measured, scored with the kit's scorer:**
 
-| Set | Rules only | With LLM, paced | With LLM, unpaced |
-|---|---|---|---|
-| Public practice set | 0.969 | 0.969 | 0.969 |
-| `held_out` | 1.0 | 1.0 | n/a |
-| `fresh` | 1.0 | 1.0 | n/a |
-| `fresh2` | 0.954 | **0.996** | 0.987 |
-| `fresh3` | 0.769 | **0.938** | 0.822 |
+| Set | Rules only | With LLM, paced |
+|---|---|---|
+| Public practice set | 0.969 | 0.969 |
+| `held_out` | 1.0 | 1.0 |
+| `fresh` | 1.0 | 1.0 |
+| `fresh2` | 0.954 | **0.996** |
+| `fresh3` | 0.769 | **0.938** |
+| `golden` | 0.960 | **0.980** |
+| `round1` | 0.911 | **1.0** |
+| `round2` | 0.954 | **0.975** |
+| `round3` | 0.900 | **0.964** |
+| `round4` | 0.941 | **0.976** |
+| `round5` | 0.980 | 0.980 |
+| `round6` | 0.973 | 0.973 |
+| `round7` | 1.0 | 1.0 |
+| `round8` | 0.978 | 0.978 |
 
-- "Paced" spaces the calls under the free tier's limit of 8,000 tokens a minute, about six LLM questions a minute. "Unpaced" is how a scorer would run it: some calls hit the limit and fall back to the rules.
-- With the LLM on, no question scored lower than rules-only, 7 scored higher, and no stale value appeared. Unpaced runs had no errors, consistency stayed at 1.0, and the slowest answer took 0.8 s.
+Unpaced, as a scorer would run it, earlier runs gave fresh2 0.987 and fresh3 0.822: some calls hit the free tier's limit and fall back to the rules.
+
+- "Paced" spaces the calls under the free tier's limit of 8,000 tokens a minute, about six LLM questions a minute.
+- With the LLM on, no set scored lower than rules-only and no stale value appeared. Unpaced runs had no errors, consistency stayed at 1.0, and the slowest answer took under 1 s.
+- One question once got worse: the model saw only the first 350 characters of a long fee list and missed "Rolled coin $0.10". Long passages are now shown around the words the question asks about.
 - The LLM was not tuned on these sets. The routing rule above was fixed after seeing the public losses, so the public numbers are not a clean test of it.
 
 **On 57 messy questions with no answer key** (`eval_own/probe_messy.txt`), it changed 17 answers. By my reading, 12 got better, 2 got worse, and 3 were about the same.
@@ -122,7 +166,12 @@ Everyday wording that differs from the site's ("will mobile payments cost me ext
 
 ## Limits
 
-- **Everyday wording is the weak spot.** Matching is lexical. When a member's words share nothing with the site's, the system refuses or picks a weaker passage.
+- **Everyday wording is the weak spot.** Matching is lexical. When a member's words share nothing with the site's, the system refuses or picks a weaker passage. Known misses from the rounds:
+  - "can my wife use my HSA" vs "add an authorized user"
+  - "how long can a business real estate loan be" vs "what loan terms are available"
+  - a fee question that names a loan ("pay my loan by card")
+- **Lowercase names are not recognised as subjects.** "forbes recognition dupaco" misses the newest-release route that "Forbes" takes.
+- **Off-topic questions sometimes get a loosely related passage instead of a refusal** (a Wi-Fi password, a stock price). The LLM layer refuses these.
 - **Answers are extractive.** They quote the site rather than summarise it, so they can read awkwardly.
 - **Snapshots are treated as full copies of the site.** A page missing from a later snapshot counts as removed. That is right for these Dupaco crawls; the self-test's partial second snapshot loses one fee question because of it.
 - **Rule coverage is English question patterns.** Unusual phrasing can miss a handler and fall through to search.
